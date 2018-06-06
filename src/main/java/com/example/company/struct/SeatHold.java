@@ -7,7 +7,7 @@ import java.util.Set;
  *
  * @param <T> How each seat is represented. (e.g. Integer ids, String names, etc.)
  */
-//I could make this class more generic using the following (and replacing Set with CollectionType)
+//I could make this class more generic using the following (and replacing Set<T> with CollectionType)
 //but I feel that doing so would make this class a little too generic:
 //public abstract class SeatHold<CollectionType extends Collection<T>, T> {
 public abstract class SeatHold<T> {
