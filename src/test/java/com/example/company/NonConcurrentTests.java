@@ -21,16 +21,16 @@ public class NonConcurrentTests {
 		String failureMessage = "Number of available seats different than expected";
 
 		boolean[][] seatingConfiguration = new boolean[][]{
-				{true , true , !true, true},
-				{!true, true , true       },
-				{true , true , true , true},
-				{!true, !true, !true, !true}
+				{true, true, false, true},
+				{false, true, true},
+				{true, true, true, true},
+				{false, false, false, false}
 		};
 		boolean[][] seatingConfiguration2 = new boolean[][]{
 				{true, true, true, true},
-				{true, true, true      },
+				{true, true, true},
 				{true, true, true, true},
-				{true, true, true      }
+				{true, true, true}
 		};
 		TicketService ts1 = new Venue(seatingConfiguration);
 		TicketService ts2 = new Venue(seatingConfiguration2);
@@ -153,11 +153,11 @@ public class NonConcurrentTests {
 	@Test
 	public void testSeatingPreferenceGetsBestSeats() {
 		boolean[][] seatingConfiguration = new boolean[][]{
-				{true , !true, true, true, !true, !true},
-				{!true, true , true, true, !true, true },
-				{!true, !true, true, true, true , !true},
-				{!true, true , true, true, true , !true},
-				{!true, true , true, true, !true, true },
+				{true, false, true, true, false, false},
+				{false, true, true, true, false, true},
+				{false, false, true, true, true, false},
+				{false, true, true, true, true, false},
+				{false, true, true, true, false, true},
 		};
 
 		Venue v1 = new Venue(seatingConfiguration);

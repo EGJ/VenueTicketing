@@ -20,13 +20,13 @@ public class Venue implements TicketService {
 	private final int totalSeatsInVenue;
 
 	//The set containing the number of seats available to hold
-	private ConcurrentSkipListSet<Integer> availableSeats = new ConcurrentSkipListSet<>();
+	private final ConcurrentSkipListSet<Integer> availableSeats = new ConcurrentSkipListSet<>();
 	//Maps the email of customers who have been given a temporary seat hold to their SeatHold
-	private ConcurrentHashMap<String, VenueSeatHold> seatHolds = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<String, VenueSeatHold> seatHolds = new ConcurrentHashMap<>();
 	//Maps the email of customers who have been given a temporary seat hold to the pending event that will remove the hold
-	private ConcurrentHashMap<String, ScheduledFuture<?>> pendingTasks = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<String, ScheduledFuture<?>> pendingTasks = new ConcurrentHashMap<>();
 	//Maps the email of customers who have registered their seats to their SeatHold
-	private ConcurrentHashMap<String, VenueSeatHold> reservedSeats = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<String, VenueSeatHold> reservedSeats = new ConcurrentHashMap<>();
 
 	//The seating order of the venue
 	private SeatingPreference seatingPreference = SeatingPreference.NONE;
