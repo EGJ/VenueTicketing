@@ -10,19 +10,21 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.TreeSet;
 
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentSkipListSet;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  *
  */
 public class Venue implements TicketService {
+	private final int totalSeatsInVenue;
+
 	//The set containing the number of seats available to hold
 	private ConcurrentSkipListSet<Integer> availableSeats = new ConcurrentSkipListSet<>();
 	//Maps the email of customers who have been given a temporary seat hold to their SeatHold
 	private ConcurrentHashMap<String, VenueSeatHold> seatHolds = new ConcurrentHashMap<>();
+	//Maps the email of customers who have been given a temporary seat hold to the pending event that will remove the hold
+	private ConcurrentHashMap<String, ScheduledFuture<?>> pendingTasks = new ConcurrentHashMap<>();
 	//Maps the email of customers who have registered their seats to their SeatHold
 	private ConcurrentHashMap<String, VenueSeatHold> reservedSeats = new ConcurrentHashMap<>();
 
@@ -40,13 +42,14 @@ public class Venue implements TicketService {
 	 *
 	 * @param seatsPerSide The number of seats in every row and column
 	 */
-	public Venue(int seatsPerSide){
+	public Venue(int seatsPerSide) {
 		//Creates a square seating arrangement.
 		//Note: The index of a seat is represented by its position in row-major order.
 		//Index 0 is in the back left corner of the venue.
-		for(int i=0; i<seatsPerSide*seatsPerSide; i++){
+		for (int i = 0; i < seatsPerSide * seatsPerSide; i++) {
 			availableSeats.add(i);
 		}
+		totalSeatsInVenue = seatsPerSide * seatsPerSide;
 	}
 
 	/**
@@ -55,15 +58,16 @@ public class Venue implements TicketService {
 	 * i.e. initializes a 2d-array of shape [seatsPerRow][numColumns] in a set representation.
 	 *
 	 * @param seatsPerRow The number of seats in every row
-	 * @param numColumns The number of seats in every column
+	 * @param numColumns  The number of seats in every column
 	 */
-	public Venue(int seatsPerRow, int numColumns){
+	public Venue(int seatsPerRow, int numColumns) {
 		//Creates a rectangular seating arrangement.
 		//Note: The index of a seat is represented by its position in row-major order.
 		//Index 0 is in the back left corner of the venue.
-		for(int i=0; i<seatsPerRow*numColumns; i++){
+		for (int i = 0; i < seatsPerRow * numColumns; i++) {
 			availableSeats.add(i);
 		}
+		totalSeatsInVenue = seatsPerRow * numColumns;
 	}
 
 	/**
@@ -73,25 +77,25 @@ public class Venue implements TicketService {
 	 *
 	 * @param seatingConfiguration A 2d-array representing the seats available in the venue
 	 */
-	public Venue(boolean[][] seatingConfiguration){
+	public Venue(boolean[][] seatingConfiguration) {
 		//Note: The index of a seat is represented by its position in row-major order.
 		//Index 0 is in the back left corner of the venue.
 
-		//The number of rows in the venue
-		int numRows = seatingConfiguration.length;
+		int currentSeatNumber = -1;
 		//For each row
-		for(int row=0; row<numRows; row++){
+		for (boolean[] row : seatingConfiguration) {
 			//For each column
-			for(int col=0; col<seatingConfiguration[row].length; col++){
+			for (boolean seatAvailable : row) {
+				currentSeatNumber++;
 				//Check if the seat at this location is available
-				boolean currentSeatAvailable = seatingConfiguration[row][col];
-				if(currentSeatAvailable){
+				if (seatAvailable) {
 					//If it is, add it to the set of available seats
 					//Note: The index of a seat is represented by its position in row-major order.
-					availableSeats.add(numRows*row + col);
+					availableSeats.add(currentSeatNumber);
 				}
 			}
 		}
+		this.totalSeatsInVenue = currentSeatNumber + 1;
 	}
 
 	@Override
@@ -104,7 +108,11 @@ public class Venue implements TicketService {
 	}
 
 	@Override
-	public SeatHold<Integer> findAndHoldSeats(int numSeats, String customerEmail){
+	public SeatHold<Integer> findAndHoldSeats(int numSeats, String customerEmail) {
+		return findAndHoldSeats(numSeats, customerEmail, seatingPreference);
+	}
+
+	public SeatHold<Integer> findAndHoldSeats(int numSeats, String customerEmail, SeatingPreference seatingPreference) {
 		//The id of the seats that have been held
 		Set<Integer> heldSeats = new HashSet<>(numSeats);
 		//The amount of seats that have been held so far
@@ -112,134 +120,202 @@ public class Venue implements TicketService {
 
 		//An iterator for the set
 		//Note: It is undefined whether or not iterators will see the changes of any concurrent modifications to the map.
-		Iterator<Integer> iterator;
+		Iterator<Integer> iterator = null;
 
 		//Hold seats based on the venue's seating order
-		if(seatingPreference == SeatingPreference.CLOSEST_TO_BACK || seatingPreference == SeatingPreference.NONE){
+		if (seatingPreference == SeatingPreference.CLOSEST_TO_BACK || seatingPreference == SeatingPreference.NONE) {
 			//An iterator that iterates the set in order
 			iterator = availableSeats.iterator();
-		}else if(seatingPreference == SeatingPreference.CLOSEST_TO_FRONT){
+		} else if (seatingPreference == SeatingPreference.CLOSEST_TO_FRONT) {
 			//An iterator that iterates the set backwards
 			iterator = availableSeats.descendingIterator();
-		}else if(seatingPreference == SeatingPreference.CLOSEST_TO_CENTER) {
+		} else if (seatingPreference == SeatingPreference.CLOSEST_TO_CENTER) {
 			//Convert the set to an array
 			Integer[] availableSeatsArray = availableSeats.toArray(new Integer[0]);
-			int arrSize = availableSeatsArray.length;
-			//TODO: Finish
-			return null;
-		}else if(seatingPreference == SeatingPreference.CLOSEST_TOGETHER) {
-			//Convert the set to an array
-			Integer[] availableSeatsArray = availableSeats.toArray(new Integer[0]);
-			int arrSize = availableSeatsArray.length;
 
-			//Find the runs in the array of available seats
+			//A sparse-array-like representation of the above array.
+			//The array's size is the value of the largest available seat's index (+1 to include that index as well)
+			Boolean[] seatAtIndex = new Boolean[totalSeatsInVenue];
+			//Initialize the values in the array
+			//e.g. [3,5,9] -> [false, false, false, true, false, true, false, false, false, true]
+			for (Integer i : availableSeatsArray) {
+				seatAtIndex[i] = true;
+			}
+
+			final int arrSize = seatAtIndex.length;
+			//Variable used to determine whether the next seat index that should be check is above or below the center
+			boolean up = true;
+			final int center = arrSize / 2;
+			//The distance the current index is from the center
+			int distanceFromCenter = 0;
+
+			//If the number of reserved seats desired has not been reached, and the end of the array hasn't been reached
+			for (int seat = center; (seatsSuccessfullyReserved != numSeats) && (seat < arrSize - 2 && seat > 1); up ^= true) {
+				if (up) {
+					//If the next index that should be checked is above the center
+					//Get the seat at the appropriate distance from the center (initially the center itself)
+					seat = center + distanceFromCenter;
+					//Increment the current distance from the center (only done every other seat checked)
+					distanceFromCenter++;
+				} else {
+					//If the next index that should be checked is below the center
+					//Get the seat at the appropriate distance from the center
+					seat = center - distanceFromCenter;
+				}
+				//Check if the seat at the specified index is available
+				//This check is not strictly necessary, but would otherwise hinder performance (though is technically less accurate)
+				if (seatAtIndex[seat] != null && seatAtIndex[seat]) {
+					//Remove it from the set of available seats
+					boolean succeeded = availableSeats.remove(seat);
+					//Check if the removal succeeded (will fail if another thread removed the seat before this one)
+					if (succeeded) {
+						//If it successfully removed the seat, add it to the set of held seats
+						heldSeats.add(seat);
+						seatsSuccessfullyReserved++;
+					}
+				}
+			}
+		} else if (seatingPreference == SeatingPreference.CLOSEST_TOGETHER) {
+			//Convert the set to an array
+			Integer[] availableSeatsArray = availableSeats.toArray(new Integer[0]);
+
+			//Find the runs in the array of available seats (largest run first)
 			TreeSet<LinkedHashSet<Integer>> runs = getRuns(availableSeatsArray);
 
-			//TODO: Finish
-			return null;
-		}else{
+			if (runs != null) {
+				//For each run
+				for (LinkedHashSet<Integer> run : runs) {
+					Iterator<Integer> iterator1 = run.iterator();
+					//For each seat in the run, and while the number of seats the customer wanted has been not yet been held
+					while (iterator1.hasNext() && seatsSuccessfullyReserved != numSeats) {
+						Integer seat = iterator1.next();
+						//Remove it from the set of available seats
+						boolean succeeded = availableSeats.remove(seat);
+						//Check if the removal succeeded (will fail if another thread removed the seat before this one)
+						if (succeeded) {
+							//If it successfully removed the seat, add it to the set of held seats
+							heldSeats.add(seat);
+							seatsSuccessfullyReserved++;
+						}
+					}
+				}
+			}
+		} else {
 			//In case a new SeatingPreference is added, throw an exception
 			throw new UnsupportedOperationException("SeatingPreference: " + seatingPreference + " is not currently supported.");
 		}
 
-		//For each available seat
-		while(iterator.hasNext()){
-			Integer seat = iterator.next();
-			//If the number of seats the customer wanted has been reached
-			if(seatsSuccessfullyReserved == numSeats){
-				break;
-			}
+		//If an the current SeatingPreference required a single iterator
+		if (iterator != null) {
+			//For each available seat, and while the number of seats the customer wanted has been not yet been held
+			while (iterator.hasNext() && seatsSuccessfullyReserved != numSeats) {
+				Integer seat = iterator.next();
 
-			//Remove it from the set of available seats
-			boolean succeeded = availableSeats.remove(seat);
-			//Check if the removal succeeded (will fail if another thread removed the seat before this one)
-			if (succeeded) {
-				//If it successfully removed the seat, add it to the set of held seats
-				heldSeats.add(seat);
-				seatsSuccessfullyReserved++;
+				//Remove it from the set of available seats
+				boolean succeeded = availableSeats.remove(seat);
+				//Check if the removal succeeded (will fail if another thread removed the seat before this one)
+				if (succeeded) {
+					//If it successfully removed the seat, add it to the set of held seats
+					heldSeats.add(seat);
+					seatsSuccessfullyReserved++;
+				}
 			}
 		}
+
 		//If all seats have been checked and there are none left, but the customer wanted more seats
-		if(heldSeats.size() != numSeats){
+		if (heldSeats.size() != numSeats) {
+			//Optionally, check if there are more seats available now and try to hold the remaining seats needed
+			/*if(numSeatsAvailable() != 0){
+				VenueSeatHold vsh = (VenueSeatHold) findAndHoldSeats(numSeats - heldSeats.size(), customerEmail);
+
+				if(vsh != null){
+					vsh.reserveAdditionalSeats(heldSeats);
+				}
+			}else{See below}*/
+
 			//Remember to add the held seats back to the set of available seats
 			availableSeats.addAll(heldSeats);
 			//Since the customer's request did not succeed, return null
 			return null;
-		}else{
+		} else {
 			//If all seats were registered successfully.
 
-			//If this customer already has some seats held
-			VenueSeatHold seatHold = seatHolds.get(customerEmail);
-			if(seatHold != null){
-				//Update that SeatHold with the additional seats
+			//Get the current SeatHold Object associated with the customer
+			VenueSeatHold seatHold = seatHolds.remove(customerEmail);
+			if (seatHold != null) {
+				//If this customer already has some seats held it will have a scheduled task running. Get that task
+				//(A lock isn't necessary since only one thread will succeed in removing from a concurrent collection)
+				ScheduledFuture<?> pendingTask = pendingTasks.remove(customerEmail);
+				pendingTask.cancel(true);
+
+				//Update the SeatHold with the additional seats
 				seatHold.reserveAdditionalSeats(heldSeats);
-			}else{
+			} else {
 				//Otherwise, return a new SeatHold Object with those seats
 				seatHold = new VenueSeatHold(seatHoldId.getAndIncrement(), heldSeats, customerEmail);
 				seatHolds.put(customerEmail, seatHold);
 			}
 
+			//Create a new timer to auto-release the seatHold
+			createAutoReleaseTask(customerEmail);
+
 			return seatHold;
 		}
-		//Relevant test: testSeatOnlyHoldableBySingleCustomer
 	}
 
 	@Override
 	public String reserveSeats(int seatHoldId, String customerEmail) {
-		//Get the actual SeatHold registered by this customer, if there is one
-		VenueSeatHold seatHold = seatHolds.get(customerEmail);
+		//Get the actual SeatHold registered by this customer, if there is one, and remove it from the
+		VenueSeatHold seatHold = seatHolds.remove(customerEmail);
 		//If the customer actually has a SeatHold
-		if(seatHold != null){
-			seatHold.lock();
-			//If the SeatHold expired after the lock was acquired
-			if(seatHolds.get(customerEmail) == null){
-				return "Sorry, your seat hold has expired";
-			}
-			seatHolds.remove(customerEmail);
+		if (seatHold != null) {
+			//Update the relevant maps
 			reservedSeats.put(customerEmail, seatHold);
-			return "Your seats have been registered. You registration code is: " + seatHoldId;
-		}else{
-			return "Sorry, no seat hold was found for the email address.\nYou may have entered";
+			pendingTasks.remove(customerEmail);
+
+			return Integer.toString(seatHoldId);
+		} else {
+			return null;
 		}
 	}
 
 	/**
-	 * @param seatingPreference The new seating preference for this venue
+	 * @param seatingPreference The new default seating preference for this venue
 	 */
-	public void setSeatingPreference(SeatingPreference seatingPreference){
+	public synchronized void setSeatingPreference(SeatingPreference seatingPreference) {
 		this.seatingPreference = seatingPreference;
 	}
 
 	/**
-	 * @return The seating preference for this venue
+	 * @return The default seating preference for this venue
 	 */
-	public SeatingPreference getSeatingPreference(){
+	public synchronized SeatingPreference getSeatingPreference() {
 		return seatingPreference;
 	}
 
 	/**
 	 * Given a sorted array, this function returns a set of all the runs (consecutive integers of size >= 1)
-	 * in said array. The TreeSet returns the runs in order of descending number of elements.
+	 * in said array. The TreeSet returns the runs in by descending number of elements.
 	 *
 	 * @param arr The sorted array of integers to find runs in
 	 * @return A set of all runs in the array, in descending order
 	 */
-	private static TreeSet<LinkedHashSet<Integer>> getRuns(Integer[] arr){
+	private static TreeSet<LinkedHashSet<Integer>> getRuns(Integer[] arr) {
 		//If there are no elements
-		if(arr.length == 0){
-			return null;
+		if (arr.length == 0) {
+			return new TreeSet<>();
 		}
 		//The variable holding the previous element in the array (see loop below)
 		int previousValue = arr[0];
 
 		//Create a new TreeSet (ordered) and override the comparator so largest elements come first
-		TreeSet<LinkedHashSet<Integer>> allRuns = new TreeSet<>((LinkedHashSet<Integer> o1, LinkedHashSet<Integer> o2) ->{
+		TreeSet<LinkedHashSet<Integer>> allRuns = new TreeSet<>((LinkedHashSet<Integer> o1, LinkedHashSet<Integer> o2) -> {
 			//Compare the lengths of the sets
 			int result = Integer.compare(o2.size(), o1.size());
 			//If the sets have the same size
-			if(result == 0){
+			if (result == 0) {
 				//Check if they are equal (so two sets with the same size can both be added)
-				if(!o1.equals(o2)){
+				if (!o1.equals(o2)) {
 					//If they are different sets, set the result to 1 (o1 is "bigger" than o2)
 					result = 1;
 				}
@@ -253,14 +329,14 @@ public class Venue implements TicketService {
 		currentRuns.add(previousValue);
 
 		//For each element in the array, starting at index 1
-		for(int i=1; i<arr.length; i++){
+		for (int i = 1; i < arr.length; i++) {
 			//Get the value of that element
 			int val = arr[i];
 			//If this value is part of a run with the previous element
-			if(val == previousValue+1){
+			if (val == previousValue + 1) {
 				//Add it to the set of runs for this iteration
 				currentRuns.add(val);
-			}else{
+			} else {
 				//Otherwise, the run for this iteration to the set of all runs (may contain only one value)
 				allRuns.add(currentRuns);
 				//Clear the set of runs in preparation for the next iteration
@@ -276,10 +352,22 @@ public class Venue implements TicketService {
 		return allRuns;
 	}
 
-	/*public void something(){
+	private void createAutoReleaseTask(String customerEmail) {
 		//Create a task to automatically release a SeatHold after 5 seconds.
-		ScheduledFuture<?> scheduledTask = timerExecutorService.schedule(()  -> {
-			//...
+		ScheduledFuture<?> scheduledTask = timerExecutorService.schedule(() -> {
+			//Remove the SeatHold from the map of SeatHolds
+			VenueSeatHold seatHold = seatHolds.remove(customerEmail);
+			if (seatHold != null) {
+				//Return the held seats to the set of available seats
+				availableSeats.addAll(seatHold.getReservedSeats());
+				//Remove this task from the map of tasks
+				pendingTasks.remove(customerEmail);
+			}
+			//Note: The task is not auto-removed if a SeatHold is not found; this means either an improper email was
+			//entered, or another thread calling reserveSeats/findAndHoldSeats got the SeatHold first and will
+			//remove the task there.
 		}, 5, TimeUnit.SECONDS);
-	}*/
+
+		pendingTasks.put(customerEmail, scheduledTask);
+	}
 }

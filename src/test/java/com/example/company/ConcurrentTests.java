@@ -109,23 +109,4 @@ public class ConcurrentTests {
 			}
 		}
 	}
-
-	@Test
-	public void testConcurrentModificationAllowed(){
-
-		//The following works, but I don't really want to use reflection to access a private field
-		/*
-		Venue v = new Venue(10);
-
-		try{
-			Field f = Venue.class.getDeclaredField("availableSeats");
-			f.setAccessible(true);
-			Object o = f.get(v);
-			Collection a = (Collection) o;
-
-		}catch(NoSuchFieldException | IllegalAccessException e){
-
-		}
-		*/
-	}
 }

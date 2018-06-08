@@ -17,10 +17,10 @@ public abstract class SeatHold<T> {
 	private Set<T> reservedSeats;
 
 	/**
-	 * @param id The id of the new SeatHold Object
+	 * @param id            The id of the new SeatHold Object
 	 * @param reservedSeats The list of seats reserved by this SeatHold Object
 	 */
-	protected SeatHold(int id, Set<T> reservedSeats){
+	protected SeatHold(int id, Set<T> reservedSeats) {
 		this.id = id;
 		this.reservedSeats = reservedSeats;
 	}
@@ -28,21 +28,21 @@ public abstract class SeatHold<T> {
 	/**
 	 * @return The id of the seat hold object
 	 */
-	public int getId(){
+	public int getId() {
 		return id;
 	}
 
 	/**
 	 * @return The seats which this SeatHold is reserving
 	 */
-	public Set<T> getReservedSeats(){
+	public Set<T> getReservedSeats() {
 		return reservedSeats;
 	}
 
 	/**
 	 * @param reservedSeats The seats to be reserved
 	 */
-	public void setReservedSeats(Set<T> reservedSeats){
+	public void setReservedSeats(Set<T> reservedSeats) {
 		this.reservedSeats = reservedSeats;
 	}
 }
